@@ -22,10 +22,10 @@ typedef struct {
 /* Array mapping hardware setup per LED channel */
 static const led_config_t led_cfg[LED_COUNT] = {
     /* [Channel] = { ADC Channel,   Min OK (mV), Max OK (mV), Margin (mV) } */
-    [0]          = { ADC_CHANNEL_0, 1800U,       2500U,       200U }, /* LED 0: Left indicator */
+    [0]          = { ADC_CHANNEL_0, 2500U,       2800U,       200U }, /* LED 0: Left indicator */
     [1]          = { ADC_CHANNEL_2, 1700U,       2400U,       200U }, /* LED 1: Right indicator */
-    [2]          = { ADC_CHANNEL_3, 1900U,       2600U,       200U }, /* LED 2: Low beam */
-    [3]          = { ADC_CHANNEL_9, 2000U,       2700U,       200U }, /* LED 3: High beam */
+    [2]          = { ADC_CHANNEL_3, 2500U,       2800U,       200U }, /* LED 2: Low beam */
+    [3]          = { ADC_CHANNEL_9, 1600U,       2000U,       200U }, /* LED 3: High beam */
 };
 
 /**
