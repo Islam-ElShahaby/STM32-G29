@@ -639,40 +639,133 @@ static void control_task(void *arg)
 		 * the two consumers.
 		 */
 		{
-			bool left_on, right_on, low_on, high_on;
-			bool left_out, right_out, low_out, high_out;
+    bool left_on  = false;
+    bool right_on = false;
+    bool low_on   = false;
+    bool high_on  = false;
 
-			shared_lights_state = lights_toggle_update(
-				st.buttons, &left_on, &right_on, &low_on, &high_on);
+    bool left_out  = false;
+    bool right_out = false;
+    bool low_out   = false;
+    bool high_out  = false;
 
-			/* Drive the physical pins first -- see lights_gpio_set()'s
-			 * comment in telemetry.h. left_out/right_out come back
-			 * gated by the indicator blink phase (500 ms on/off);
-			 * low_out/high_out always equal low_on/high_on. */
-			lights_gpio_set(left_on, right_on, low_on, high_on,
-					 &left_out, &right_out, &low_out, &high_out);
 
-			/*
-			 * LED fault sampling: one round-robin ADC reading per
-			 * tick, non-blocking (see led_fault.c) -- cheap enough
-			 * to run every tick unconditionally. Deliberately kept
-			 * in control_task, the sole owner of ADC1:
-			 * shifter_update() below is the only other caller, and
-			 * it's in this same task, so the two can never race
-			 * each other's HAL_ADC_* calls. can_task only ever
-			 * reads the fault verdict via led_fault_get() (see
-			 * telemetry.c), never the ADC itself.
-			 *
-			 * Fed the actual driven pin states (left_out/right_out),
-			 * not the raw toggle-enable states (left_on/right_on):
-			 * the indicators blink at 1 Hz while toggled on, so
-			 * left_on/right_on stay true through the 500 ms dark
-			 * half of every blink cycle -- sampling against that
-			 * would read the node as SHORT every time the blinker
-			 * is legitimately dark.
-			 */
-			led_fault_update(left_out, right_out, low_out, high_out);
-		}
+    /*
+     * ================================================================
+     * STARTUP LED SELF-TEST
+     * ================================================================
+     *
+     * led_fault.c owns the self-test state machine.
+     *
+     * It does NOT directly access GPIOs.
+     *
+     * Instead it tells us which physical LED should be ON. This task
+     * then remains the sole owner of lights_gpio_set().
+     */
+    if (led_fault_selftest_running())
+    {
+        /*
+         * Advance the self-test state machine.
+         *
+         * The four arguments are ignored while the self-test is active.
+         */
+        led_fault_update(
+            false,
+            false,
+            false,
+            false
+        );
+
+
+        /*
+         * Obtain the output requested by the self-test.
+         */
+        led_fault_selftest_outputs(
+            &left_out,
+            &right_out,
+            &low_out,
+            &high_out
+        );
+
+
+        /*
+         * Drive the physical LEDs.
+         *
+         * No blink gating is applied here because the self-test must
+         * produce a steady electrical load.
+         */
+        lights_gpio_set(
+            left_out,
+            right_out,
+            low_out,
+            high_out,
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        );
+    }
+    else
+    {
+        /*
+         * ============================================================
+         * NORMAL LIGHT OPERATION
+         * ============================================================
+         */
+
+        /*
+         * Calculate the commanded light states.
+         */
+        shared_lights_state =
+            lights_toggle_update(
+                st.buttons,
+                &left_on,
+                &right_on,
+                &low_on,
+                &high_on
+            );
+
+
+        /*
+         * Apply indicator blinking and physically drive the outputs.
+         *
+         * left_out/right_out represent the ACTUAL physical GPIO state.
+         */
+        lights_gpio_set(
+            left_on,
+            right_on,
+            low_on,
+            high_on,
+            &left_out,
+            &right_out,
+            &low_out,
+            &high_out
+        );
+
+
+        /*
+         * Fault monitor sees the ACTUAL physical state.
+         *
+         * This is important for the blinking indicators:
+         *
+         *     left_on  = commanded ON
+         *     left_out = physically ON right now
+         *
+         * During the 500 ms OFF part of the blink:
+         *
+         *     left_on  = true
+         *     left_out = false
+         *
+         * Therefore the ADC monitor correctly freezes during that time.
+         */
+        led_fault_update(
+            left_out,
+            right_out,
+            low_out,
+            high_out
+        );
+    }
+}
 
 		/*
 		 * Powertrain sim: FEEL_MS (10 ms) x2 = PT_TICK_MS (20 ms), the
@@ -931,11 +1024,19 @@ int main(void)
 
 	printf("MCP2515: %s\r\n", mcp2515_init() == 0 ? "ok" : "not responding");
 
-	adc_init();
-	/* shifter no longer needs its own init -- adc_init() above already
-	 * configures PA1 as analog and brings up the shared ADC1 peripheral. */
-	led_fault_init();
-	lights_gpio_init();
+adc_init();
+
+/* GPIO must be initialized before the LED self-test starts. */
+lights_gpio_init();
+
+led_fault_init();
+
+/*
+ * Start the non-blocking LED electrical self-test.
+ *
+ * The actual GPIO outputs are driven from control_task().
+ */
+led_fault_selftest_start();
 
 	/* Nothing has drained the ring yet — push the banner out synchronously so
 	 * a failure before the scheduler starts is still visible. */

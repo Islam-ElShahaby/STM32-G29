@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define LED_COUNT 4
+#define LED_COUNT 4U
+
 
 typedef enum
 {
@@ -13,36 +14,134 @@ typedef enum
     LED_SHORT
 } led_fault_state_t;
 
+
+/*
+ * Startup self-test state.
+ *
+ * NOT_RUN  : self-test has not started
+ * RUNNING  : self-test is currently testing the LEDs
+ * PASS     : all LEDs passed
+ * FAIL     : one or more LEDs failed
+ */
+typedef enum
+{
+    LED_SELFTEST_NOT_RUN = 0,
+    LED_SELFTEST_RUNNING,
+    LED_SELFTEST_PASS,
+    LED_SELFTEST_FAIL
+} led_selftest_state_t;
+
+
+/*
+ * Normal LED fault monitoring.
+ */
 void led_fault_init(void);
 
 /**
- * @brief  Samples one LED (round-robin, one per call -- see led_fault.c)
- *         and updates its fault verdict once a debounce window completes.
+ * @brief Samples one LED using round-robin scheduling.
  *
- * @param  left_on   Left indicator  (LED index 0) commanded-on state.
- * @param  right_on  Right indicator (LED index 1) commanded-on state.
- * @param  low_on    Low beam        (LED index 2) commanded-on state.
- * @param  high_on   High beam       (LED index 3) commanded-on state.
+ * One LED is sampled per call.
  *
- * The "on" state has to come from the caller: led_fault.c has no way to
- * know whether a light is legitimately dark or actually open/shorted
- * without being told which one it is. It must be the actual driven pin
- * state -- i.e. telemetry.c:lights_gpio_set()'s left_out/right_out/
- * low_out/high_out outputs, AFTER the 1 Hz indicator blink gating is
- * applied -- not the raw toggle-enable state from lights_toggle_update().
- * Left/right indicators are commanded on for their whole blink cycle but
- * only physically driven for half of it (500 ms on / 500 ms off); feeding
- * the pre-blink toggle state here would sample the node as "should be lit"
- * during the dark half and misclassify every blink as a short. While a
- * given LED is off, its debounce window is held (not advanced, not reset)
- * rather than sampled: there is no defined "healthy" voltage for an
- * unpowered node in this circuit, so the correct behaviour is to freeze
- * that LED's last verdict, not guess.
+ * When the LED is commanded OFF, its previous fault state is held.
+ *
+ * When commanded ON, ADC samples are accumulated until the debounce
+ * window completes.
  */
-void led_fault_update(bool left_on, bool right_on, bool low_on, bool high_on);
+void led_fault_update(bool left_on,
+                     bool right_on,
+                     bool low_on,
+                     bool high_on);
 
+
+/*
+ * Normal fault status.
+ */
 led_fault_state_t led_fault_get(uint8_t led);
+
 uint16_t led_fault_voltage(uint8_t led);
 
 
-#endif
+/*
+ * --------------------------------------------------------------------------
+ * STARTUP SELF-TEST
+ * --------------------------------------------------------------------------
+ *
+ * The self-test is non-blocking.
+ *
+ * Call:
+ *
+ *     led_fault_selftest_start();
+ *
+ * once during startup.
+ *
+ * Then call:
+ *
+ *     led_fault_update(...)
+ *
+ * every control tick as usual.
+ *
+ * While the self-test is running, led_fault_update() internally executes
+ * the self-test instead of normal fault monitoring.
+ *
+ * The application must obtain the requested physical LED outputs using
+ * led_fault_selftest_outputs().
+ */
+
+
+/**
+ * @brief Start the startup LED self-test.
+ */
+void led_fault_selftest_start(void);
+
+
+/**
+ * @brief Returns true while the startup self-test is running.
+ */
+bool led_fault_selftest_running(void);
+
+
+/**
+ * @brief Returns true once the self-test has finished.
+ */
+bool led_fault_selftest_complete(void);
+
+
+/**
+ * @brief Returns true only when all LEDs passed.
+ */
+bool led_fault_selftest_passed(void);
+
+
+/**
+ * @brief Returns the self-test result for one LED.
+ *
+ * @return
+ *     LED_SELFTEST_NOT_RUN
+ *     LED_SELFTEST_RUNNING
+ *     LED_SELFTEST_PASS
+ *     LED_SELFTEST_FAIL
+ */
+led_selftest_state_t led_fault_selftest_get(uint8_t led);
+
+
+/**
+ * @brief Returns the overall self-test state.
+ */
+led_selftest_state_t led_fault_selftest_state(void);
+
+
+/**
+ * @brief Gets the physical outputs requested by the self-test.
+ *
+ * During self-test, the caller should drive the four GPIO outputs
+ * according to these values.
+ *
+ * Outside self-test all outputs are returned false.
+ */
+void led_fault_selftest_outputs(bool *left_on,
+                                bool *right_on,
+                                bool *low_on,
+                                bool *high_on);
+
+
+#endif /* LED_FAULT_H */
