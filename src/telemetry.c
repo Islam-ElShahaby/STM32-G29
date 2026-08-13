@@ -10,22 +10,21 @@
 
 
 /*
- * Physical button bitmasks in shared_buttons (see g29_hid.c's report parse
- * for the full button bitfield -- these four are the ones this file cares
- * about). Confirmed against a live button-press log: each of these bits was
- * the only one set while its corresponding wheel paddle/button was pressed.
- *
  * FIXED: these four values had gotten rotated one slot relative to their
- * /* lN/rN *\/ comments (BTN_HIGH_BEAM was holding BTN_LOW_BEAM's old
+ * lN/rN comments (BTN_HIGH_BEAM was holding BTN_LOW_BEAM's old
  * value, etc.) -- the labels no longer matched what was actually
  * confirmed against the live button-press log, so pressing the low-beam
  * paddle (r2) was toggling high_beam instead. Restored to the values
  * that were actually confirmed.
  */
+
+
+ 
 #define BTN_HIGH_BEAM         0x00000400U /* l3 */
 #define BTN_LOW_BEAM          0x00000800U/* r2 */
 #define BTN_LEFT_INDICATOR    0x00000080U/* l2 */
 #define BTN_RIGHT_INDICATOR   0x00000040U/* r3 */
+#define BTN_X   0x00000001U/* x */
 
 /* Output bit positions in the CAN_LIGHTS_ID frame's single data byte. */
 #define LIGHTS_BIT_HIGH_BEAM       0
@@ -89,13 +88,15 @@ static void send_telemetry_can_msg(uint8_t speed, uint16_t rpm, int8_t gear, cha
     /* Send frame using existing MCP2515 API */
     mcp2515_send(&frame);
 }
-static void send_lights_can_msg(uint8_t lights_state, uint8_t fault_state)
+static void send_lights_can_msg(uint8_t lights_state,
+                                uint8_t fault_state,
+                                bool x_pressed)
 {
     static uint8_t msg_counter = 0;
     struct can_frame frame;
 
     frame.id = CAN_LIGHTS_ID;
-    frame.dlc = 3;
+    frame.dlc = 4;
 
     /* Byte 0: light/indicator ON/OFF state */
     frame.data[0] = lights_state;
@@ -109,8 +110,16 @@ static void send_lights_can_msg(uint8_t lights_state, uint8_t fault_state)
      */
     frame.data[1] = fault_state;
 
-    /* Byte 2: rolling counter */
-    frame.data[2] = msg_counter++;
+    /* Byte 2: X button
+     * 0 = not pressed
+     * 1 = pressed
+     *
+     * BTN_X used to dismiss notifications.
+     */
+    frame.data[2] = x_pressed ? 1U : 0U;
+
+    /* Byte 3: rolling counter */
+    frame.data[3] = msg_counter++;
 
     mcp2515_send(&frame);
 }
@@ -183,23 +192,29 @@ uint8_t lights_toggle_update(uint32_t buttons, bool *left_on, bool *right_on,
  *               longer touches buttons or runs any toggle logic -- it only
  *               decides when to send, exactly as before.
  */
-void can_lights_update(uint8_t lights_state, uint8_t fault_state)
+void can_lights_update(uint8_t lights_state,
+                       uint8_t fault_state,
+                       uint32_t buttons)
 {
     static uint32_t last_tx_time = 0;
     static uint8_t prev_lights_state = 0xFFU;
     static uint8_t prev_fault_state = 0xFFU;
+    static bool prev_x_pressed = false;
 
     uint32_t now = HAL_GetTick();
+    bool x_pressed = (buttons & BTN_X) != 0U;
 
     if ((now - last_tx_time >= LIGHTS_TX_PERIOD_MS) ||
         (lights_state != prev_lights_state) ||
-        (fault_state != prev_fault_state))
+        (fault_state != prev_fault_state) ||
+        (x_pressed != prev_x_pressed))
     {
-        send_lights_can_msg(lights_state, fault_state);
+        send_lights_can_msg(lights_state, fault_state, x_pressed);
 
         last_tx_time = now;
         prev_lights_state = lights_state;
         prev_fault_state = fault_state;
+        prev_x_pressed = x_pressed;
     }
 }
 /*

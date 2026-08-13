@@ -764,7 +764,10 @@ static void can_task(void *arg)
          */
         can_telemetry_update((enum shifter_mode)shared_shifter, shared_hands_on);
 
-		can_lights_update(shared_lights_state, get_led_fault_state());
+		can_lights_update(shared_lights_state,
+                  get_led_fault_state(),
+                  shared_buttons);
+
 
 
 

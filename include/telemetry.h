@@ -53,19 +53,24 @@ void can_telemetry_update(enum shifter_mode shifter_sel, bool hands_on);
  */
 uint8_t lights_toggle_update(uint32_t buttons, bool *left_on, bool *right_on,
                               bool *low_on, bool *high_on);
-
+                              
 /**
- * @brief  Sends the 0x0A3 exterior-lights frame: one byte each for high beam,
- *         low beam, left indicator, right indicator. Transmits on any change
- *         and at least every 100 ms.
+ * @brief  Sends the 0x0A3 exterior-lights frame.
  *
- * @param  lights_state  Packed toggle state from lights_toggle_update(),
- *                        CAN-frame bit order. This function only packs and
- *                        sends -- it no longer reads buttons or runs the
- *                        toggle logic itself.
+ * CAN frame layout:
+ *   Byte 0: Light states
+ *   Byte 1: LED fault states
+ *   Byte 2: Button states
+ *           Bit 0 = X button
+ *   Byte 3: Rolling counter
+ *
+ * @param lights_state  Packed light state from lights_toggle_update().
+ * @param fault_state   Packed LED fault state.
+ * @param buttons       Raw G29 button bitmap (shared_buttons).
  */
-void can_lights_update(uint8_t lights_state, uint8_t fault_state);
-
+void can_lights_update(uint8_t lights_state,
+                       uint8_t fault_state,
+                       uint32_t buttons);
 
 
 
