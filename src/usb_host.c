@@ -3,8 +3,7 @@
  * it registers our custom G29 class instead of the stock HID class.
  */
 #include "usb_host.h"
-#include "usbh_core.h"
-#include "g29_hid.h"
+
 
 USBH_HandleTypeDef hUsbHostFS;
 

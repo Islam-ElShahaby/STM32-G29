@@ -1,8 +1,10 @@
 #ifndef ADC_H
 #define ADC_H
-
+#include <stdbool.h>
 #include <stdint.h>
-
+#include "stm32f4xx_hal.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
 
 /* ========================================================================== */
 /* Initialization                                                             */

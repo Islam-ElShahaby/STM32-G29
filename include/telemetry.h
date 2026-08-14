@@ -1,9 +1,16 @@
 #ifndef TELEMETRY_H
 #define TELEMETRY_H
 
-#include <stdint.h>
-#include <stdbool.h>
+
+
 #include "shifter.h"
+#include "mcp2515.h"
+#include "powertrain.h"
+#include "led_fault.h"
+#include "adc.h"
+#include "stm32f4xx_hal.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 /**
  * @brief  Periodically constructs and sends CAN telemetry payload over MCP2515.

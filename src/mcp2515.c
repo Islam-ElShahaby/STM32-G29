@@ -8,7 +8,7 @@
  * blocking SPI.  That is all a cyclic-broadcast sensor node needs.
  */
 #include "mcp2515.h"
-#include "stm32f4xx_hal.h"
+
 
 /* ── Build-time configuration ───────────────────────────────────────────── */
 

@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
+#include "stm32f4xx_hal.h"
 /*
  * Minimal MCP2515 SPI-to-CAN driver for the STM32 BlackPill.
  *

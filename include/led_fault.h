@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include "adc.h"
+#include "stm32f4xx_hal.h"
+
 
 #define LED_COUNT 4U
 
