@@ -1971,7 +1971,7 @@ int main(void)
      * LIGHT GPIO
      *
      * Left  -> PB2
-     * Right -> PA6
+     * Right -> PB7
      * Low   -> PA7
      * High  -> PA8
      * =====================================================================

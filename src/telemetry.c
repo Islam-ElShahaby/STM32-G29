@@ -4,6 +4,7 @@
 #include "powertrain.h"
 #include "shifter.h"
 #include "led_fault.h"
+#include "adc.h"
 
 #include "stm32f4xx_hal.h"
 
@@ -37,7 +38,7 @@
 /* ========================================================================= */
 
 /*
- * CAN 0x0A3 Byte 0
+ * CAN 0x0A3 Byte 1
  *
  * Bit 0 = High beam
  * Bit 1 = Low beam
@@ -65,12 +66,14 @@
 /*
  * IMPORTANT:
  *
- * PA5 is used by the temperature ADC.
+ * PA6 is used by the ADC for servo feedback.
  *
- * Therefore the light outputs are:
+ * Therefore PA6 MUST NOT be used as a light output.
+ *
+ * Light outputs:
  *
  * Left indicator  -> PB2
- * Right indicator -> PA6
+ * Right indicator -> PB7
  * Low beam        -> PA7
  * High beam       -> PA8
  */
@@ -78,8 +81,8 @@
 #define LEFT_LED_PORT       GPIOB
 #define LEFT_LED_PIN        GPIO_PIN_2
 
-#define RIGHT_LED_PORT      GPIOA
-#define RIGHT_LED_PIN       GPIO_PIN_6
+#define RIGHT_LED_PORT      GPIOB
+#define RIGHT_LED_PIN       GPIO_PIN_7
 
 #define LOW_LED_PORT        GPIOA
 #define LOW_LED_PIN         GPIO_PIN_7
@@ -91,17 +94,6 @@
 /* ========================================================================= */
 /* CAN TRANSMISSION PERIOD                                                   */
 /* ========================================================================= */
-
-/*
- * main.c calls:
- *
- *     can_telemetry_update()
- *     can_lights_update()
- *
- * from the CAN task every 10 ms.
- *
- * Therefore the maximum actual CAN transmission rate is 10 ms.
- */
 
 #define LIGHTS_TX_PERIOD_MS       10U
 #define TELEMETRY_TX_PERIOD_MS    10U
@@ -115,14 +107,15 @@
  * CAN ID: 0x0A2
  * DLC:    8
  *
- * Byte 0-1 : Engine RPM, little endian
- * Byte 2   : Vehicle speed
- * Byte 3   : Gear mode
- *            'P' / 'N' / 'D' / 'R'
- * Byte 4   : Gear number
- * Byte 5   : Hands-on flag
- * Byte 6   : Reserved
- * Byte 7   : Rolling counter
+ * Byte 1 -> data[0] : Engine RPM LOW
+ * Byte 2 -> data[1] : Engine RPM HIGH
+ * Byte 3 -> data[2] : Vehicle speed
+ * Byte 4 -> data[3] : Gear mode
+ *                       'P' / 'N' / 'D' / 'R'
+ * Byte 5 -> data[4] : Gear number
+ * Byte 6 -> data[5] : Hands-on flag
+ * Byte 7 -> data[6] : Reserved
+ * Byte 8 -> data[7] : Rolling counter
  */
 
 static void send_telemetry_can_msg(
@@ -143,7 +136,7 @@ static void send_telemetry_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 0-1: RPM                                                         */
+    /* Byte 1-2: RPM                                                         */
     /* --------------------------------------------------------------------- */
 
     frame.data[0] =
@@ -154,14 +147,15 @@ static void send_telemetry_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 2: Speed                                                         */
+    /* Byte 3: Speed                                                         */
     /* --------------------------------------------------------------------- */
 
-    frame.data[2] = speed;
+    frame.data[2] =
+        speed;
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 3: Gear mode                                                     */
+    /* Byte 4: Gear mode                                                     */
     /* --------------------------------------------------------------------- */
 
     frame.data[3] =
@@ -169,7 +163,7 @@ static void send_telemetry_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 4: Gear number                                                   */
+    /* Byte 5: Gear number                                                   */
     /* --------------------------------------------------------------------- */
 
     frame.data[4] =
@@ -177,7 +171,7 @@ static void send_telemetry_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 5: Hands-on                                                      */
+    /* Byte 6: Hands-on                                                      */
     /* --------------------------------------------------------------------- */
 
     frame.data[5] =
@@ -185,14 +179,15 @@ static void send_telemetry_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 6: Reserved                                                      */
+    /* Byte 7: Reserved                                                      */
     /* --------------------------------------------------------------------- */
 
-    frame.data[6] = 0x00U;
+    frame.data[6] =
+        0x00U;
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 7: Rolling counter                                               */
+    /* Byte 8: Rolling counter                                               */
     /* --------------------------------------------------------------------- */
 
     frame.data[7] =
@@ -208,14 +203,14 @@ static void send_telemetry_can_msg(
 
 
 /* ========================================================================= */
-/* 0x0A3 LIGHTS / FAULT / FUEL / TEMPERATURE                                */
+/* 0x0A3 LIGHTS / FAULT / FUEL / TEMPERATURE / SERVO ANGLE                   */
 /* ========================================================================= */
 
 /*
  * CAN ID: 0x0A3
- * DLC:    6
+ * DLC:    7
  *
- * Byte 0:
+ * Byte 1:
  *
  *     Bit 0 = High beam
  *     Bit 1 = Low beam
@@ -223,7 +218,7 @@ static void send_telemetry_can_msg(
  *     Bit 3 = Right indicator
  *
  *
- * Byte 1:
+ * Byte 2:
  *
  *     Bits 1:0 = Left indicator fault
  *     Bits 3:2 = Right indicator fault
@@ -238,10 +233,34 @@ static void send_telemetry_can_msg(
  *     10 = SHORT
  *
  *
- * Byte 2 = X button
- * Byte 3 = Fuel       0..100 %
- * Byte 4 = Temperature 0..100 %
- * Byte 5 = Rolling counter
+ * Byte 3 = X button
+ * Byte 4 = Fuel              0..100 %
+ * Byte 5 = Temperature       0..100 %
+ * Byte 6 = Servo angle       0..180 degrees
+ * Byte 7 = Rolling counter
+ *
+ *
+ * Servo feedback:
+ *
+ *     PA6
+ *     ADC_CHANNEL_6
+ *
+ * Raw ADC range:
+ *
+ *     0    -> approximately 0 V
+ *     4095 -> approximately 3.3 V
+ *
+ *
+ * Servo angle conversion:
+ *
+ *     angle = ADC * 180 / 4095
+ *
+ *
+ * Examples:
+ *
+ *     ADC = 0       -> 0°
+ *     ADC = 2047    -> approximately 90°
+ *     ADC = 4095    -> 180°
  */
 
 static void send_lights_can_msg(
@@ -249,7 +268,8 @@ static void send_lights_can_msg(
     uint8_t fault_state,
     bool x_pressed,
     uint8_t fuel,
-    uint8_t temperature
+    uint8_t temperature,
+    uint8_t servo_angle
 )
 {
     static uint8_t msg_counter = 0U;
@@ -258,11 +278,15 @@ static void send_lights_can_msg(
 
 
     frame.id = CAN_LIGHTS_ID;
-    frame.dlc = 6U;
+
+    /*
+     * We use 7 CAN bytes.
+     */
+    frame.dlc = 7U;
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 0: Light states                                                  */
+    /* Byte 1: Light states                                                  */
     /* --------------------------------------------------------------------- */
 
     frame.data[0] =
@@ -270,7 +294,7 @@ static void send_lights_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 1: LED fault states                                              */
+    /* Byte 2: LED fault states                                              */
     /* --------------------------------------------------------------------- */
 
     frame.data[1] =
@@ -278,7 +302,7 @@ static void send_lights_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 2: X button                                                      */
+    /* Byte 3: X button                                                      */
     /* --------------------------------------------------------------------- */
 
     frame.data[2] =
@@ -286,26 +310,38 @@ static void send_lights_can_msg(
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 3: Fuel 0..100                                                   */
+    /* Byte 4: Fuel 0..100                                                   */
     /* --------------------------------------------------------------------- */
 
     frame.data[3] =
-        (fuel > 100U) ? 100U : fuel;
+        (fuel > 100U)
+        ? 100U
+        : fuel;
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 4: Temperature 0..100                                            */
+    /* Byte 5: Temperature 0..100                                            */
     /* --------------------------------------------------------------------- */
 
     frame.data[4] =
-        (temperature > 100U) ? 100U : temperature;
+        (temperature > 100U)
+        ? 100U
+        : temperature;
 
 
     /* --------------------------------------------------------------------- */
-    /* Byte 5: Rolling counter                                               */
+    /* Byte 6: Servo angle 0..180                                            */
     /* --------------------------------------------------------------------- */
 
     frame.data[5] =
+        servo_angle;
+
+
+    /* --------------------------------------------------------------------- */
+    /* Byte 7: Rolling counter                                               */
+    /* --------------------------------------------------------------------- */
+
+    frame.data[6] =
         msg_counter++;
 
 
@@ -333,10 +369,7 @@ static void toggle_on_press(
 
 
     /*
-     * Toggle only on the rising edge.
-     *
-     * This means holding a G29 button does not repeatedly toggle
-     * the light.
+     * Toggle only on rising edge.
      */
 
     if (
@@ -366,20 +399,12 @@ uint8_t lights_toggle_update(
     bool *high_on
 )
 {
-    /*
-     * Persistent logical states.
-     */
-
     static bool high_beam = false;
     static bool low_beam = false;
 
     static bool left_indicator = false;
     static bool right_indicator = false;
 
-
-    /*
-     * Previous button states.
-     */
 
     static bool high_beam_pressed = false;
     static bool low_beam_pressed = false;
@@ -441,24 +466,28 @@ uint8_t lights_toggle_update(
     /* --------------------------------------------------------------------- */
 
     if (left_on != NULL) {
-        *left_on = left_indicator;
+        *left_on =
+            left_indicator;
     }
 
     if (right_on != NULL) {
-        *right_on = right_indicator;
+        *right_on =
+            right_indicator;
     }
 
     if (low_on != NULL) {
-        *low_on = low_beam;
+        *low_on =
+            low_beam;
     }
 
     if (high_on != NULL) {
-        *high_on = high_beam;
+        *high_on =
+            high_beam;
     }
 
 
     /* --------------------------------------------------------------------- */
-    /* Pack CAN Byte 0                                                       */
+    /* Pack CAN Byte 1                                                       */
     /* --------------------------------------------------------------------- */
 
     return (uint8_t)(
@@ -497,6 +526,8 @@ void can_lights_update(
     static uint8_t prev_fuel = 0xFFU;
     static uint8_t prev_temperature = 0xFFU;
 
+    static uint8_t prev_servo_angle = 0xFFU;
+
     static bool prev_x_pressed = false;
 
 
@@ -508,19 +539,33 @@ void can_lights_update(
         ((buttons & BTN_X) != 0U);
 
 
-    /*
-     * Clamp values.
-     */
+    /* --------------------------------------------------------------------- */
+    /* Read servo feedback from PA6                                          */
+    /* --------------------------------------------------------------------- */
+
+uint8_t servo_angle =
+    adc_get_servo_angle();
+
+
+    /* --------------------------------------------------------------------- */
+    /* Clamp fuel                                                            */
+    /* --------------------------------------------------------------------- */
 
     if (fuel > 100U) {
         fuel = 100U;
     }
+
+
+    /* --------------------------------------------------------------------- */
+    /* Clamp temperature                                                     */
+    /* --------------------------------------------------------------------- */
 
     if (temperature > 100U) {
         temperature = 100U;
     }
 
 
+    /* --------------------------------------------------------------------- */
     /*
      * Transmit:
      *
@@ -545,20 +590,46 @@ void can_lights_update(
      * OR
      *
      * 6. Temperature changed
+     *
+     * OR
+     *
+     * 7. Servo angle changed
      */
+    /* --------------------------------------------------------------------- */
 
     if (
-        (now - last_tx_time >= LIGHTS_TX_PERIOD_MS) ||
+        (now - last_tx_time >=
+         LIGHTS_TX_PERIOD_MS)
 
-        (lights_state != prev_lights_state) ||
+        ||
 
-        (fault_state != prev_fault_state) ||
+        (lights_state !=
+         prev_lights_state)
 
-        (x_pressed != prev_x_pressed) ||
+        ||
 
-        (fuel != prev_fuel) ||
+        (fault_state !=
+         prev_fault_state)
 
-        (temperature != prev_temperature)
+        ||
+
+        (x_pressed !=
+         prev_x_pressed)
+
+        ||
+
+        (fuel !=
+         prev_fuel)
+
+        ||
+
+        (temperature !=
+         prev_temperature)
+
+        ||
+
+        (servo_angle !=
+         prev_servo_angle)
     ) {
 
         send_lights_can_msg(
@@ -566,7 +637,8 @@ void can_lights_update(
             fault_state,
             x_pressed,
             fuel,
-            temperature
+            temperature,
+            servo_angle
         );
 
 
@@ -588,6 +660,9 @@ void can_lights_update(
 
         prev_temperature =
             temperature;
+
+        prev_servo_angle =
+            servo_angle;
     }
 }
 
@@ -613,6 +688,7 @@ void lights_gpio_init(void)
     /* Initial outputs LOW                                                   */
     /* --------------------------------------------------------------------- */
 
+    /* Left indicator -> PB2 */
     HAL_GPIO_WritePin(
         LEFT_LED_PORT,
         LEFT_LED_PIN,
@@ -620,9 +696,19 @@ void lights_gpio_init(void)
     );
 
 
+    /* Right indicator -> PB7 */
+    HAL_GPIO_WritePin(
+        RIGHT_LED_PORT,
+        RIGHT_LED_PIN,
+        GPIO_PIN_RESET
+    );
+
+
+    /* Low beam -> PA7 */
+    /* High beam -> PA8 */
+
     HAL_GPIO_WritePin(
         GPIOA,
-        RIGHT_LED_PIN |
         LOW_LED_PIN |
         HIGH_LED_PIN,
         GPIO_PIN_RESET
@@ -631,10 +717,12 @@ void lights_gpio_init(void)
 
     /* --------------------------------------------------------------------- */
     /* PB2 - Left indicator                                                  */
+    /* PB7 - Right indicator                                                 */
     /* --------------------------------------------------------------------- */
 
     g.Pin =
-        LEFT_LED_PIN;
+        LEFT_LED_PIN |
+        RIGHT_LED_PIN;
 
     g.Mode =
         GPIO_MODE_OUTPUT_PP;
@@ -647,19 +735,17 @@ void lights_gpio_init(void)
 
 
     HAL_GPIO_Init(
-        LEFT_LED_PORT,
+        GPIOB,
         &g
     );
 
 
     /* --------------------------------------------------------------------- */
-    /* PA6 - Right indicator                                                 */
     /* PA7 - Low beam                                                        */
     /* PA8 - High beam                                                       */
     /* --------------------------------------------------------------------- */
 
     g.Pin =
-        RIGHT_LED_PIN |
         LOW_LED_PIN |
         HIGH_LED_PIN;
 
@@ -692,17 +778,16 @@ void lights_gpio_set(
 
     /*
      * Indicator blink.
-     *
-     * 0..499 ms   = ON
-     * 500..999 ms = OFF
      */
 
     bool blink_phase =
-        ((now / INDICATOR_BLINK_PERIOD_MS) % 2U) == 0U;
+        ((now / INDICATOR_BLINK_PERIOD_MS) % 2U)
+        == 0U;
 
 
     bool left_output =
         left_on && blink_phase;
+
 
     bool right_output =
         right_on && blink_phase;
@@ -722,7 +807,7 @@ void lights_gpio_set(
 
 
     /* --------------------------------------------------------------------- */
-    /* Right indicator -> PA6                                                */
+    /* Right indicator -> PB7                                                */
     /* --------------------------------------------------------------------- */
 
     HAL_GPIO_WritePin(
@@ -870,7 +955,7 @@ void can_telemetry_update(
 
 
     /* --------------------------------------------------------------------- */
-    /* Hands-on change                                                       */
+    /* Hands-on change                                                        */
     /* --------------------------------------------------------------------- */
 
     bool hod_changed =
@@ -878,13 +963,15 @@ void can_telemetry_update(
 
 
     /* --------------------------------------------------------------------- */
-    /* Periodic / event transmission                                         */
+    /* Periodic / event transmission                                          */
     /* --------------------------------------------------------------------- */
 
     if (
         (now - last_tx_time >=
          TELEMETRY_TX_PERIOD_MS)
+
         ||
+
         hod_changed
     ) {
 
@@ -899,6 +986,7 @@ void can_telemetry_update(
 
         last_tx_time =
             now;
+
 
         prev_hands_on =
             hands_on;
@@ -942,7 +1030,7 @@ static uint8_t led_fault_to_bits(
 /* ========================================================================= */
 
 /*
- * Byte layout:
+ * Byte 2 layout:
  *
  * Bits 1:0 = LED 0 = Left indicator
  * Bits 3:2 = LED 1 = Right indicator

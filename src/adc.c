@@ -5,35 +5,21 @@
 #include "stm32f4xx_hal.h"
 
 
-
-
+/* ========================================================================== */
+/* Configuration                                                              */
+/* ========================================================================== */
 
 #define ADC_TIMEOUT_MS       2U
 
 #define ADC_MAX_VALUE        4095U
 #define ADC_MAX_PERCENT      100U
 
-/*
- * Hysteresis in percentage points.
- *
- * Example:
- *
- * Current value = 1%
- *
- * Normal boundary for 2%:
- *
- *     2%
- *
- * With +5% hysteresis:
- *
- *     ADC must reach approximately 7% above
- *     the current state before increasing.
- *
- * Similarly, when decreasing, the ADC must
- * go sufficiently below the current boundary.
- */
 #define HYSTERESIS_PERCENT   5U
 
+
+/* ========================================================================== */
+/* ADC handle / state                                                         */
+/* ========================================================================== */
 
 static ADC_HandleTypeDef hadc1;
 
@@ -76,6 +62,7 @@ void adc_init(void)
      * PA3 = ADC_CHANNEL_3
      * PA4 = ADC_CHANNEL_4 -> Fuel
      * PA5 = ADC_CHANNEL_5 -> Temperature
+     * PA6 = ADC_CHANNEL_6 -> Servo feedback
      */
     /* ---------------------------------------------------------------------- */
 
@@ -85,12 +72,16 @@ void adc_init(void)
         GPIO_PIN_2 |
         GPIO_PIN_3 |
         GPIO_PIN_4 |
-        GPIO_PIN_5;
+        GPIO_PIN_5 |
+        GPIO_PIN_6;
 
     gpio.Mode = GPIO_MODE_ANALOG;
     gpio.Pull = GPIO_NOPULL;
 
-    HAL_GPIO_Init(GPIOA, &gpio);
+    HAL_GPIO_Init(
+        GPIOA,
+        &gpio
+    );
 
 
     /* ---------------------------------------------------------------------- */
@@ -99,7 +90,10 @@ void adc_init(void)
 
     gpio.Pin = GPIO_PIN_1;
 
-    HAL_GPIO_Init(GPIOB, &gpio);
+    HAL_GPIO_Init(
+        GPIOB,
+        &gpio
+    );
 
 
     /* ---------------------------------------------------------------------- */
@@ -155,7 +149,7 @@ void adc_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Reset values                                                            */
+    /* Reset cached values                                                    */
     /* ---------------------------------------------------------------------- */
 
     fuel_value = 0U;
@@ -171,13 +165,18 @@ uint16_t adc_read_channel(uint32_t channel)
 {
     ADC_ChannelConfTypeDef cfg = {0};
 
+    uint16_t value;
+
 
     if (!adc_initialized) {
         return 0U;
     }
 
 
-    /* Configure channel */
+    /* ---------------------------------------------------------------------- */
+    /* Configure channel                                                      */
+    /* ---------------------------------------------------------------------- */
+
     cfg.Channel = channel;
     cfg.Rank = 1;
     cfg.SamplingTime = ADC_SAMPLETIME_480CYCLES;
@@ -194,7 +193,10 @@ uint16_t adc_read_channel(uint32_t channel)
     }
 
 
-    /* Start conversion */
+    /* ---------------------------------------------------------------------- */
+    /* Start conversion                                                       */
+    /* ---------------------------------------------------------------------- */
+
     if (
         HAL_ADC_Start(&hadc1)
         != HAL_OK
@@ -204,7 +206,10 @@ uint16_t adc_read_channel(uint32_t channel)
     }
 
 
-    /* Wait for conversion */
+    /* ---------------------------------------------------------------------- */
+    /* Wait for conversion                                                    */
+    /* ---------------------------------------------------------------------- */
+
     if (
         HAL_ADC_PollForConversion(
             &hadc1,
@@ -218,8 +223,11 @@ uint16_t adc_read_channel(uint32_t channel)
     }
 
 
-    /* Read result */
-    uint16_t value =
+    /* ---------------------------------------------------------------------- */
+    /* Read result                                                            */
+    /* ---------------------------------------------------------------------- */
+
+    value =
         (uint16_t)HAL_ADC_GetValue(&hadc1);
 
 
@@ -238,10 +246,71 @@ uint16_t adc_read_mv(uint32_t channel)
 {
     uint32_t raw;
 
-    raw = adc_read_channel(channel);
+
+    raw =
+        adc_read_channel(channel);
+
 
     return (uint16_t)(
         (raw * 3300U) /
+        ADC_MAX_VALUE
+    );
+}
+
+
+/* ========================================================================== */
+/* Servo feedback                                                             */
+/* ========================================================================== */
+/*
+ * PA6 = ADC_CHANNEL_6
+ *
+ * This value is returned as the raw 12-bit ADC value:
+ *
+ *     0    = 0 V
+ *     4095 = approximately 3.3 V
+ *
+ * It is intentionally NOT passed through the fuel/temperature
+ * percentage hysteresis filter.
+ */
+/* ========================================================================== */
+
+/* ========================================================================== */
+/* Servo feedback -> angle                                                    */
+/* ========================================================================== */
+/*
+ * PA6 = ADC_CHANNEL_6
+ *
+ * ADC range:
+ *
+ *     0    -> 0 V    -> 0 degrees
+ *     4095 -> 3.3 V  -> 180 degrees
+ *
+ * Therefore:
+ *
+ *     angle = ADC * 180 / 4095
+ */
+/* ========================================================================== */
+
+uint8_t adc_get_servo_angle(void)
+{
+    uint16_t raw;
+
+    raw =
+        adc_read_channel(
+            ADC_CHANNEL_6
+        );
+
+
+    if (raw >= ADC_MAX_VALUE) {
+        return 180U;
+    }
+
+
+    return (uint8_t)(
+        (
+            (uint32_t)raw *
+            180U
+        ) /
         ADC_MAX_VALUE
     );
 }
@@ -257,6 +326,7 @@ static uint8_t adc_raw_to_percent(uint16_t raw)
         return 100U;
     }
 
+
     return (uint8_t)(
         ((uint32_t)raw * 100U) /
         ADC_MAX_VALUE
@@ -265,25 +335,7 @@ static uint8_t adc_raw_to_percent(uint16_t raw)
 
 
 /* ========================================================================== */
-/*
- * Hysteresis filter
- *
- * The important point:
- *
- * The current output is remembered.
- *
- * If the signal moves upward, we require it to cross
- * the next boundary + hysteresis.
- *
- * If the signal moves downward, we require it to cross
- * the current boundary - hysteresis.
- *
- * This prevents:
- *
- *     1 2 1 2 1 2
- *
- * when the ADC is oscillating around a boundary.
- */
+/* Hysteresis filter                                                          */
 /* ========================================================================== */
 
 static uint8_t adc_apply_hysteresis(
@@ -292,6 +344,7 @@ static uint8_t adc_apply_hysteresis(
 )
 {
     uint8_t instantaneous;
+
 
     instantaneous =
         adc_raw_to_percent(raw);
@@ -303,17 +356,9 @@ static uint8_t adc_apply_hysteresis(
 
     if (current_percent >= 100U) {
 
-        /*
-         * Only leave 100% when the signal drops
-         * below the lower hysteresis threshold.
-         */
-
         uint32_t lower =
-            (
-                100U *
-                ADC_MAX_VALUE
-            ) /
-            ADC_MAX_PERCENT;
+            ADC_MAX_VALUE;
+
 
         uint32_t hysteresis =
             (
@@ -335,6 +380,7 @@ static uint8_t adc_apply_hysteresis(
             current_percent = 99U;
         }
 
+
         return current_percent;
     }
 
@@ -345,16 +391,6 @@ static uint8_t adc_apply_hysteresis(
 
     if (instantaneous > current_percent) {
 
-        /*
-         * Next percentage boundary.
-         *
-         * Example:
-         *
-         * current = 1
-         *
-         * next boundary = 2%
-         */
-
         uint32_t next_boundary =
             (
                 ((uint32_t)
@@ -364,10 +400,6 @@ static uint8_t adc_apply_hysteresis(
                 ADC_MAX_PERCENT
             );
 
-
-        /*
-         * Add hysteresis.
-         */
 
         uint32_t hysteresis =
             (
@@ -389,7 +421,6 @@ static uint8_t adc_apply_hysteresis(
 
 
         if (raw >= upper) {
-
             current_percent++;
         }
 
@@ -403,16 +434,6 @@ static uint8_t adc_apply_hysteresis(
     /* ---------------------------------------------------------------------- */
 
     if (instantaneous < current_percent) {
-
-        /*
-         * Current percentage boundary.
-         *
-         * Example:
-         *
-         * current = 2%
-         *
-         * normal lower boundary = 2%
-         */
 
         uint32_t boundary =
             (
@@ -445,7 +466,6 @@ static uint8_t adc_apply_hysteresis(
 
 
         if (raw < lower) {
-
             current_percent--;
         }
 
@@ -474,7 +494,7 @@ void adc_update(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Fuel                                                                     */
+    /* Fuel - PA4 / ADC_CHANNEL_4                                             */
     /* ---------------------------------------------------------------------- */
 
     fuel_raw =
@@ -484,7 +504,7 @@ void adc_update(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Temperature                                                              */
+    /* Temperature - PA5 / ADC_CHANNEL_5                                     */
     /* ---------------------------------------------------------------------- */
 
     temp_raw =
@@ -494,7 +514,7 @@ void adc_update(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Apply hysteresis                                                        */
+    /* Apply hysteresis                                                       */
     /* ---------------------------------------------------------------------- */
 
     fuel_value =
