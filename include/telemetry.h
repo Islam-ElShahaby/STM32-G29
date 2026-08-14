@@ -68,9 +68,12 @@ uint8_t lights_toggle_update(uint32_t buttons, bool *left_on, bool *right_on,
  * @param fault_state   Packed LED fault state.
  * @param buttons       Raw G29 button bitmap (shared_buttons).
  */
+
 void can_lights_update(uint8_t lights_state,
                        uint8_t fault_state,
-                       uint32_t buttons);
+                       uint32_t buttons,
+                       uint8_t fuel,
+                       uint8_t temperature);
 
 
 

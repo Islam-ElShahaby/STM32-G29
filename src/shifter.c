@@ -6,8 +6,12 @@
  * the same channel index the Node-1 reference used, so the wiring notes carry
  * over unchanged.
  */
+#include "stm32f4xx_hal.h"
 #include "shifter.h"
 #include "adc.h"
+
+#include <stdint.h>
+#include <stdbool.h>
 
 
 /*
